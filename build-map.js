@@ -8,6 +8,7 @@ const path = require("path");
 
 const dir = __dirname;
 const gpxDir = path.join(dir, "gpx");
+const links = JSON.parse(fs.readFileSync(path.join(dir, "links.json"), "utf8"));
 
 const files = fs
   .readdirSync(gpxDir)
@@ -114,6 +115,7 @@ const segments = files.map((file) => {
     n,
     name,
     gpx: "gpx/" + file,
+    link: links[String(n)] || null,
     coords: pts.map((p) => [p.lat, p.lon]),
     stats: computeStats(pts),
   };
@@ -123,6 +125,9 @@ const totalPts = segments.reduce((a, s) => a + s.coords.length, 0);
 console.log(`Parsed ${segments.length} segments, ${totalPts} track points.`);
 const empty = segments.filter((s) => s.coords.length === 0);
 if (empty.length) console.log("WARNING: no points in:", empty.map((s) => s.n).join(", "));
+const noLink = segments.filter((s) => !s.link);
+if (noLink.length) console.log("WARNING: no link for:", noLink.map((s) => s.n + " " + s.name).join(", "));
+else console.log("All " + segments.length + " segments have a description link.");
 console.log("Sample:", segments[0].n, segments[0].name, JSON.stringify(segments[0].stats));
 
 const html = `<!DOCTYPE html>
@@ -151,8 +156,8 @@ const html = `<!DOCTYPE html>
     display: flex; align-items: center; justify-content: center;
     font-size: 11px; font-weight: 700; color: #fff; }
   .seg-label { flex: 1; }
-  .gpx-link { flex: none; color: #7fb2ff; text-decoration: none; font-size: 12px; }
-  .gpx-link:hover { text-decoration: underline; }
+  .gpx-link, .info-link { flex: none; color: #7fb2ff; text-decoration: none; font-size: 12px; }
+  .gpx-link:hover, .info-link:hover { text-decoration: underline; }
   .seg-num { background: #fff; color: #111; border-radius: 50%;
     width: 22px; height: 22px; line-height: 22px; text-align: center;
     font-size: 11px; font-weight: 700; box-shadow: 0 0 0 2px rgba(0,0,0,.4); }
@@ -160,7 +165,7 @@ const html = `<!DOCTYPE html>
   .pop table { border-collapse: collapse; font-size: 12px; }
   .pop td { padding: 1px 0; }
   .pop td:first-child { color: #666; padding-right: 14px; }
-  .pop a { display: inline-block; margin-top: 7px; color: #1769ff; }
+  .pop a { display: block; margin-top: 7px; color: #1769ff; }
 </style>
 </head>
 <body>
@@ -192,7 +197,11 @@ function popupHtml(seg) {
     "<tr><td>Max gradient</td><td>" + seg.stats.max + "</td></tr>" +
     "<tr><td>Elevation gain</td><td>" + seg.stats.gain + "</td></tr>" +
     "</table>" +
-    '<a href="' + seg.gpx + '" download>Download GPX</a></div>';
+    '<a href="' + seg.gpx + '" download>Download GPX</a>' +
+    (seg.link
+      ? '<a href="' + seg.link + '" target="_blank" rel="noopener">Segment description ↗</a>'
+      : "") +
+    "</div>";
 }
 
 const allBounds = [];
@@ -241,15 +250,26 @@ SEGMENTS.forEach(function (seg, idx) {
   label.className = "seg-label";
   label.textContent = seg.name + (seg.coords.length ? "" : " (no data)");
 
+  li.appendChild(badge);
+  li.appendChild(label);
+
+  if (seg.link) {
+    const info = document.createElement("a");
+    info.className = "info-link";
+    info.href = seg.link;
+    info.target = "_blank";
+    info.rel = "noopener";
+    info.textContent = "[info]";
+    info.addEventListener("click", function (e) { e.stopPropagation(); });
+    li.appendChild(info);
+  }
+
   const link = document.createElement("a");
   link.className = "gpx-link";
   link.href = seg.gpx;
   link.setAttribute("download", "");
   link.textContent = "[gpx]";
   link.addEventListener("click", function (e) { e.stopPropagation(); });
-
-  li.appendChild(badge);
-  li.appendChild(label);
   li.appendChild(link);
   li.addEventListener("click", function () {
     const L0 = layers[seg.n];
