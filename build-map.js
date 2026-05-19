@@ -1,41 +1,129 @@
-// Reads every .gpx in this folder, extracts track points, and writes a
-// standalone Leaflet map (flandrien-map.html) with one numbered, named
-// segment per file. Re-run after adding/removing GPX files.
+// Reads every .gpx in ./gpx/, computes per-segment stats, and writes a
+// standalone Leaflet map (index.html). GPX files are named NN-Label.gpx;
+// the NN prefix fixes the segment number and order. Re-run after editing
+// or adding files in ./gpx/.
 
 const fs = require("fs");
 const path = require("path");
 
 const dir = __dirname;
+const gpxDir = path.join(dir, "gpx");
+
 const files = fs
-  .readdirSync(dir)
+  .readdirSync(gpxDir)
   .filter((f) => f.toLowerCase().endsWith(".gpx"))
-  .sort((a, b) => a.localeCompare(b, "en"));
+  .sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
 
-function labelFromFilename(file) {
-  let s = file.replace(/\.gpx$/i, "");
-  s = s.replace(/^Flandrien.Challenge/i, ""); // drops "Flandrien-Challenge" + the separator char (incl. soft hyphen)
-  s = s.replace(/^[^A-Za-z0-9]+/, ""); // strip any leftover leading separators
-  s = s.replace(/[-_]+/g, " ").trim(); // hyphens/underscores -> spaces for readability
-  return s;
-}
-
-const segments = files.map((file, i) => {
-  const xml = fs.readFileSync(path.join(dir, file), "utf8");
+function parsePoints(xml) {
   const pts = [];
-  const re = /<trkpt[^>]*\blat="([-\d.]+)"[^>]*\blon="([-\d.]+)"|<trkpt[^>]*\blon="([-\d.]+)"[^>]*\blat="([-\d.]+)"/g;
+  const re = /<trkpt\b([^>]*?)\/?>([\s\S]*?)<\/trkpt>|<trkpt\b([^>]*?)\/>/g;
   let m;
   while ((m = re.exec(xml)) !== null) {
-    const lat = m[1] !== undefined ? parseFloat(m[1]) : parseFloat(m[4]);
-    const lon = m[2] !== undefined ? parseFloat(m[2]) : parseFloat(m[3]);
-    if (!Number.isNaN(lat) && !Number.isNaN(lon)) pts.push([lat, lon]);
+    const attrs = m[1] !== undefined ? m[1] : m[3];
+    const inner = m[2] || "";
+    const lat = parseFloat((attrs.match(/\blat="([-\d.]+)"/) || [])[1]);
+    const lon = parseFloat((attrs.match(/\blon="([-\d.]+)"/) || [])[1]);
+    const eleM = inner.match(/<ele>([-\d.]+)<\/ele>/);
+    if (Number.isNaN(lat) || Number.isNaN(lon)) continue;
+    pts.push({ lat, lon, ele: eleM ? parseFloat(eleM[1]) : null });
   }
-  return { n: i + 1, name: labelFromFilename(file), file, coords: pts };
+  return pts;
+}
+
+function haversine(a, b) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLon = toRad(b.lon - a.lon);
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+function smooth(vals, radius) {
+  return vals.map((_, i) => {
+    let sum = 0;
+    let cnt = 0;
+    for (let k = i - radius; k <= i + radius; k++) {
+      if (k >= 0 && k < vals.length && vals[k] != null) {
+        sum += vals[k];
+        cnt++;
+      }
+    }
+    return cnt ? sum / cnt : vals[i];
+  });
+}
+
+function computeStats(pts) {
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) {
+    cum[i] = cum[i - 1] + haversine(pts[i - 1], pts[i]);
+  }
+  const total = cum[cum.length - 1] || 0;
+
+  const haveEle = pts.every((p) => p.ele != null);
+  let gain = 0;
+  let avg = null;
+  let max = null;
+  if (haveEle && pts.length > 1) {
+    const eS = smooth(
+      pts.map((p) => p.ele),
+      2
+    );
+    for (let i = 1; i < eS.length; i++) {
+      const d = eS[i] - eS[i - 1];
+      if (d > 0) gain += d;
+    }
+    avg = total > 0 ? ((eS[eS.length - 1] - eS[0]) / total) * 100 : 0;
+
+    const WIN = 25; // metres — avoids GPS-jitter gradient spikes
+    let best = -Infinity;
+    for (let i = 0; i < pts.length - 1; i++) {
+      let j = i + 1;
+      while (j < pts.length - 1 && cum[j] - cum[i] < WIN) j++;
+      const dd = cum[j] - cum[i];
+      if (dd > 0) {
+        const g = ((eS[j] - eS[i]) / dd) * 100;
+        if (g > best) best = g;
+      }
+    }
+    max = best === -Infinity ? avg : best;
+  }
+
+  const fmtLen =
+    total >= 1000 ? (total / 1000).toFixed(2) + " km" : Math.round(total) + " m";
+  return {
+    length: fmtLen,
+    avg: avg == null ? "n/a" : avg.toFixed(1) + "%",
+    max: max == null ? "n/a" : max.toFixed(1) + "%",
+    gain: haveEle ? Math.round(gain) + " m" : "n/a",
+  };
+}
+
+const segments = files.map((file) => {
+  const xml = fs.readFileSync(path.join(gpxDir, file), "utf8");
+  const pts = parsePoints(xml);
+  const n = parseInt(file, 10);
+  const name = file
+    .replace(/\.gpx$/i, "")
+    .replace(/^\d+-/, "")
+    .replace(/-/g, " ")
+    .trim();
+  return {
+    n,
+    name,
+    gpx: "gpx/" + file,
+    coords: pts.map((p) => [p.lat, p.lon]),
+    stats: computeStats(pts),
+  };
 });
 
 const totalPts = segments.reduce((a, s) => a + s.coords.length, 0);
 console.log(`Parsed ${segments.length} segments, ${totalPts} track points.`);
 const empty = segments.filter((s) => s.coords.length === 0);
-if (empty.length) console.log("WARNING: no points in:", empty.map((s) => s.file).join(", "));
+if (empty.length) console.log("WARNING: no points in:", empty.map((s) => s.n).join(", "));
+console.log("Sample:", segments[0].n, segments[0].name, JSON.stringify(segments[0].stats));
 
 const html = `<!DOCTYPE html>
 <html lang="en">
@@ -50,7 +138,7 @@ const html = `<!DOCTYPE html>
   #app { display: flex; height: 100%; }
   #map { flex: 1; }
   #side {
-    width: 280px; overflow-y: auto; background: #11161c; color: #e6e6e6;
+    width: 300px; overflow-y: auto; background: #11161c; color: #e6e6e6;
     box-shadow: -2px 0 8px rgba(0,0,0,.3); z-index: 500;
   }
   #side h1 { font-size: 15px; margin: 0; padding: 14px 16px; background: #0b0e12;
@@ -62,9 +150,17 @@ const html = `<!DOCTYPE html>
   .badge { flex: none; width: 24px; height: 24px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
     font-size: 11px; font-weight: 700; color: #fff; }
+  .seg-label { flex: 1; }
+  .gpx-link { flex: none; color: #7fb2ff; text-decoration: none; font-size: 12px; }
+  .gpx-link:hover { text-decoration: underline; }
   .seg-num { background: #fff; color: #111; border-radius: 50%;
     width: 22px; height: 22px; line-height: 22px; text-align: center;
     font-size: 11px; font-weight: 700; box-shadow: 0 0 0 2px rgba(0,0,0,.4); }
+  .pop b { display: block; margin-bottom: 6px; font-size: 13px; }
+  .pop table { border-collapse: collapse; font-size: 12px; }
+  .pop td { padding: 1px 0; }
+  .pop td:first-child { color: #666; padding-right: 14px; }
+  .pop a { display: inline-block; margin-top: 7px; color: #1769ff; }
 </style>
 </head>
 <body>
@@ -88,16 +184,29 @@ function colorFor(i, total) {
   return "hsl(" + Math.round((i * 360) / total) + ",75%,48%)";
 }
 
+function popupHtml(seg) {
+  return '<div class="pop"><b>' + seg.n + ". " + seg.name + "</b>" +
+    "<table>" +
+    "<tr><td>Length</td><td>" + seg.stats.length + "</td></tr>" +
+    "<tr><td>Avg gradient</td><td>" + seg.stats.avg + "</td></tr>" +
+    "<tr><td>Max gradient</td><td>" + seg.stats.max + "</td></tr>" +
+    "<tr><td>Elevation gain</td><td>" + seg.stats.gain + "</td></tr>" +
+    "</table>" +
+    '<a href="' + seg.gpx + '" download>Download GPX</a></div>';
+}
+
 const allBounds = [];
 const layers = {};
 
 SEGMENTS.forEach(function (seg, idx) {
   if (!seg.coords.length) return;
   const color = colorFor(idx, SEGMENTS.length);
+  const html = popupHtml(seg);
 
   const line = L.polyline(seg.coords, { color: color, weight: 4, opacity: 0.85 })
     .addTo(map)
-    .bindTooltip(seg.n + ". " + seg.name, { sticky: true });
+    .bindTooltip(seg.n + ". " + seg.name, { sticky: true })
+    .bindPopup(html);
 
   const start = seg.coords[0];
   const marker = L.marker(start, {
@@ -109,7 +218,7 @@ SEGMENTS.forEach(function (seg, idx) {
     })
   })
     .addTo(map)
-    .bindPopup("<b>" + seg.n + ". " + seg.name + "</b>");
+    .bindPopup(html);
 
   layers[seg.n] = { line: line, marker: marker, bounds: line.getBounds() };
   allBounds.push(start);
@@ -122,9 +231,26 @@ const list = document.getElementById("list");
 SEGMENTS.forEach(function (seg, idx) {
   const li = document.createElement("li");
   const color = colorFor(idx, SEGMENTS.length);
-  li.innerHTML =
-    '<span class="badge" style="background:' + color + '">' + seg.n + "</span>" +
-    "<span>" + seg.name + (seg.coords.length ? "" : " (no data)") + "</span>";
+
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  badge.style.background = color;
+  badge.textContent = seg.n;
+
+  const label = document.createElement("span");
+  label.className = "seg-label";
+  label.textContent = seg.name + (seg.coords.length ? "" : " (no data)");
+
+  const link = document.createElement("a");
+  link.className = "gpx-link";
+  link.href = seg.gpx;
+  link.setAttribute("download", "");
+  link.textContent = "[gpx]";
+  link.addEventListener("click", function (e) { e.stopPropagation(); });
+
+  li.appendChild(badge);
+  li.appendChild(label);
+  li.appendChild(link);
   li.addEventListener("click", function () {
     const L0 = layers[seg.n];
     if (!L0) return;
@@ -138,6 +264,6 @@ SEGMENTS.forEach(function (seg, idx) {
 </html>
 `;
 
-const out = path.join(dir, "flandrien-map.html");
+const out = path.join(dir, "index.html");
 fs.writeFileSync(out, html, "utf8");
 console.log("Wrote " + out);
