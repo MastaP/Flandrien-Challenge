@@ -178,7 +178,14 @@ const html = `<!DOCTYPE html>
 <style>
   html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
   #app { display: flex; height: 100%; }
-  #map { flex: 1; }
+  #map-area { flex: 1; position: relative; min-width: 0; }
+  #map { width: 100%; height: 100%; }
+  #profile { position: absolute; left: 0; right: 0; bottom: 0; height: 130px;
+    background: rgba(17, 22, 28, 0.92); border-top: 1px solid #2a323c;
+    color: #e6e6e6; z-index: 1000; user-select: none; }
+  #profile.hidden { display: none; }
+  #profile svg { display: block; width: 100%; height: 100%; }
+  #map-area.profile-on .leaflet-bottom { bottom: 130px; }
   #side {
     width: 300px; background: #11161c; color: #e6e6e6;
     box-shadow: -2px 0 8px rgba(0,0,0,.3); z-index: 500;
@@ -230,7 +237,10 @@ const html = `<!DOCTYPE html>
 </head>
 <body>
 <div id="app">
-  <div id="map"></div>
+  <div id="map-area">
+    <div id="map"></div>
+    <div id="profile" class="hidden"></div>
+  </div>
   <div id="side">
     <h1>
       <span class="title"><a href="https://www.cyclinginflanders.cc/flandrien-challenge" target="_blank" rel="noopener">Flandrien Challenge — ${segments.length} segments</a></span>
@@ -370,25 +380,53 @@ map.createPane("routesPane");
 map.getPane("routesPane").style.zIndex = 350;
 
 const routeLayers = {};
-async function loadRouteCoords(file) {
+const routeData = {}; // id -> { pts:[{lat,lon,ele}], cum:[m...], totalM }
+
+function haversineLL(a, b) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLon = toRad(b.lon - a.lon);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+async function loadRouteData(file) {
   const res = await fetch(file);
   const xml = await res.text();
-  const coords = [];
+  const pts = [];
   const re = /<trkpt[^>]*lat="([-0-9.eE+]+)"[^>]*lon="([-0-9.eE+]+)"|<trkpt[^>]*lon="([-0-9.eE+]+)"[^>]*lat="([-0-9.eE+]+)"/g;
   let m;
   while ((m = re.exec(xml)) !== null) {
     const lat = parseFloat(m[1] !== undefined ? m[1] : m[4]);
     const lon = parseFloat(m[2] !== undefined ? m[2] : m[3]);
-    if (!isNaN(lat) && !isNaN(lon)) coords.push([lat, lon]);
+    if (isNaN(lat) || isNaN(lon)) continue;
+    // look up to ~120 chars ahead for the matching <ele>...</ele>
+    const window = xml.substr(re.lastIndex, 140);
+    let ele = null;
+    const a = window.indexOf("<ele>");
+    if (a >= 0) {
+      const b = window.indexOf("</ele>", a + 5);
+      if (b > a + 5) {
+        const v = parseFloat(window.substring(a + 5, b));
+        if (!isNaN(v)) ele = v;
+      }
+    }
+    pts.push({ lat, lon, ele });
   }
-  return coords;
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum[i] = cum[i - 1] + haversineLL(pts[i - 1], pts[i]);
+  return { pts, cum, totalM: cum[cum.length - 1] || 0 };
 }
+
 async function setRouteVisible(route, on, checkbox) {
   if (on) {
     if (!routeLayers[route.id]) {
       checkbox.disabled = true;
       try {
-        const coords = await loadRouteCoords(route.file);
+        const data = await loadRouteData(route.file);
+        routeData[route.id] = data;
+        const coords = data.pts.map((p) => [p.lat, p.lon]);
         routeLayers[route.id] = L.polyline(coords, {
           color: route.color, weight: 5, opacity: 0.75,
           pane: "routesPane"
@@ -403,7 +441,157 @@ async function setRouteVisible(route, on, checkbox) {
   } else if (routeLayers[route.id]) {
     map.removeLayer(routeLayers[route.id]);
   }
+  updateProfile();
 }
+
+const profileEl = document.getElementById("profile");
+const mapAreaEl = document.getElementById("map-area");
+let profileMarker = null;
+let currentProfileRouteId = null;
+
+function findIndexForDistance(cum, d) {
+  let lo = 0, hi = cum.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (cum[mid] < d) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+
+function renderProfile(route) {
+  const data = routeData[route.id];
+  if (!data || data.pts.length < 2) { hideProfile(); return; }
+  const pts = data.pts, cum = data.cum, totalM = data.totalM;
+  let eMin = Infinity, eMax = -Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    const e = pts[i].ele;
+    if (e == null) continue;
+    if (e < eMin) eMin = e;
+    if (e > eMax) eMax = e;
+  }
+  if (eMin === Infinity) { hideProfile(); return; }
+  const W = profileEl.clientWidth || 800;
+  const H = 130;
+  const PAD_L = 38, PAD_R = 10, PAD_T = 18, PAD_B = 22;
+  const innerW = W - PAD_L - PAD_R;
+  const innerH = H - PAD_T - PAD_B;
+  const range = (eMax - eMin) || 1;
+  const xOf = function (d) { return PAD_L + (d / totalM) * innerW; };
+  const yOf = function (e) { return PAD_T + (1 - (e - eMin) / range) * innerH; };
+
+  const N = Math.min(pts.length, 800);
+  const step = Math.max(1, Math.floor(pts.length / N));
+  let pathD = "", started = false;
+  for (let i = 0; i < pts.length; i += step) {
+    const p = pts[i];
+    if (p.ele == null) continue;
+    const px = xOf(cum[i]).toFixed(1);
+    const py = yOf(p.ele).toFixed(1);
+    pathD += (started ? "L" : "M") + px + " " + py + " ";
+    started = true;
+  }
+  const lastI = pts.length - 1;
+  if (pts[lastI].ele != null) {
+    pathD += "L" + xOf(cum[lastI]).toFixed(1) + " " + yOf(pts[lastI].ele).toFixed(1);
+  }
+  const baseY = (PAD_T + innerH).toFixed(1);
+  const fillD = pathD + " L" + xOf(cum[lastI]).toFixed(1) + " " + baseY + " L" + xOf(0).toFixed(1) + " " + baseY + " Z";
+
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map(function (f) { return f * totalM; });
+  let xLabels = "";
+  ticks.forEach(function (t, i) {
+    const anchor = i === 0 ? "start" : i === 4 ? "end" : "middle";
+    xLabels += '<text x="' + xOf(t).toFixed(1) + '" y="' + (PAD_T + innerH + 14).toFixed(1) + '" text-anchor="' + anchor + '" fill="#8aa0b8" font-size="10">' + (t / 1000).toFixed(1) + ' km</text>';
+  });
+
+  const html =
+    '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' +
+    '<path d="' + fillD + '" fill="' + route.color + '" fill-opacity="0.22" />' +
+    '<path d="' + pathD + '" fill="none" stroke="' + route.color + '" stroke-width="1.5" />' +
+    '<line x1="' + PAD_L + '" y1="' + baseY + '" x2="' + (W - PAD_R) + '" y2="' + baseY + '" stroke="#3a4654" />' +
+    '<text x="' + (PAD_L - 6) + '" y="' + (PAD_T + 4) + '" text-anchor="end" fill="#8aa0b8" font-size="10">' + Math.round(eMax) + ' m</text>' +
+    '<text x="' + (PAD_L - 6) + '" y="' + (PAD_T + innerH) + '" text-anchor="end" fill="#8aa0b8" font-size="10">' + Math.round(eMin) + ' m</text>' +
+    xLabels +
+    '<text x="' + PAD_L + '" y="13" fill="#e6e6e6" font-size="11">' + route.group + ' — ' + route.label + ' · ' + fmtKm(totalM) + ' · ' + fmtGain(route.stats.gainM) + ' ↑</text>' +
+    '<g id="profile-cursor" style="display:none;">' +
+    '<line id="profile-cursor-line" x1="0" y1="' + PAD_T + '" x2="0" y2="' + (PAD_T + innerH) + '" stroke="#fff" stroke-width="1" stroke-dasharray="2 2" opacity="0.6" />' +
+    '<circle id="profile-cursor-dot" cx="0" cy="0" r="3.5" fill="' + route.color + '" stroke="#fff" stroke-width="1" />' +
+    '<text id="profile-cursor-label" x="0" y="' + (PAD_T + innerH - 4) + '" text-anchor="middle" fill="#fff" font-size="10" font-weight="600"></text>' +
+    '</g>' +
+    '</svg>';
+
+  profileEl.innerHTML = html;
+  profileEl.classList.remove("hidden");
+  mapAreaEl.classList.add("profile-on");
+  currentProfileRouteId = route.id;
+
+  const svgEl = profileEl.querySelector("svg");
+  const cursorG = profileEl.querySelector("#profile-cursor");
+  const cursorLine = profileEl.querySelector("#profile-cursor-line");
+  const cursorDot = profileEl.querySelector("#profile-cursor-dot");
+  const cursorLabel = profileEl.querySelector("#profile-cursor-label");
+
+  function onMove(e) {
+    const rect = svgEl.getBoundingClientRect();
+    const xCss = e.clientX - rect.left;
+    const xSvg = (xCss / rect.width) * W;
+    if (xSvg < PAD_L || xSvg > W - PAD_R) { onLeave(); return; }
+    const dist = ((xSvg - PAD_L) / innerW) * totalM;
+    const idx = findIndexForDistance(cum, dist);
+    const p = pts[idx];
+    if (p.ele == null) return;
+    const px = xOf(cum[idx]);
+    const py = yOf(p.ele);
+    cursorG.style.display = "";
+    cursorLine.setAttribute("x1", px);
+    cursorLine.setAttribute("x2", px);
+    cursorDot.setAttribute("cx", px);
+    cursorDot.setAttribute("cy", py);
+    let lx = px;
+    if (lx < PAD_L + 30) lx = PAD_L + 30;
+    if (lx > W - PAD_R - 30) lx = W - PAD_R - 30;
+    cursorLabel.setAttribute("x", lx);
+    cursorLabel.textContent = (cum[idx] / 1000).toFixed(1) + " km · " + Math.round(p.ele) + " m";
+    if (!profileMarker) {
+      profileMarker = L.circleMarker([p.lat, p.lon], {
+        radius: 7, color: "#fff", weight: 2, fillColor: route.color, fillOpacity: 1, interactive: false
+      }).addTo(map);
+    } else {
+      profileMarker.setLatLng([p.lat, p.lon]);
+      profileMarker.setStyle({ opacity: 1, fillOpacity: 1, color: "#fff", fillColor: route.color });
+    }
+  }
+  function onLeave() {
+    cursorG.style.display = "none";
+    if (profileMarker) profileMarker.setStyle({ opacity: 0, fillOpacity: 0 });
+  }
+  svgEl.addEventListener("mousemove", onMove);
+  svgEl.addEventListener("mouseleave", onLeave);
+}
+
+function hideProfile() {
+  profileEl.classList.add("hidden");
+  mapAreaEl.classList.remove("profile-on");
+  currentProfileRouteId = null;
+  if (profileMarker) { map.removeLayer(profileMarker); profileMarker = null; }
+}
+
+function updateProfile() {
+  const onRoutes = ROUTES.filter(function (r) { return routeLayers[r.id] && map.hasLayer(routeLayers[r.id]); });
+  if (onRoutes.length === 1) renderProfile(onRoutes[0]);
+  else hideProfile();
+}
+
+let resizeT;
+window.addEventListener("resize", function () {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(function () {
+    if (currentProfileRouteId) {
+      const r = ROUTES.find(function (rr) { return rr.id === currentProfileRouteId; });
+      if (r) renderProfile(r);
+    }
+  }, 100);
+});
 
 const routesEl = document.getElementById("routes");
 const byGroup = {};
