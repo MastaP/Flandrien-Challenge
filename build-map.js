@@ -296,12 +296,12 @@ SEGMENTS.forEach(function (seg, idx) {
 });
 
 const ROUTES = [
-  { id: "1d",  group: "1-day", label: "Full route", file: "routes/1-day.gpx",   color: "#1565c0" },
-  { id: "2d1", group: "2-day", label: "Day 1",      file: "routes/2-day-1.gpx", color: "#2e7d32" },
-  { id: "2d2", group: "2-day", label: "Day 2",      file: "routes/2-day-2.gpx", color: "#7cb342" },
-  { id: "3d1", group: "3-day", label: "Day 1",      file: "routes/3-day-1.gpx", color: "#ef6c00" },
-  { id: "3d2", group: "3-day", label: "Day 2",      file: "routes/3-day-2.gpx", color: "#c62828" },
-  { id: "3d3", group: "3-day", label: "Day 3",      file: "routes/3-day-3.gpx", color: "#6a1b9a" }
+  { id: "1d",  group: "1-day", label: "Full route", file: "routes/1-day.gpx",   color: "#1565c0", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-1-day" },
+  { id: "2d1", group: "2-day", label: "Day 1",      file: "routes/2-day-1.gpx", color: "#2e7d32", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-2-days-day-1" },
+  { id: "2d2", group: "2-day", label: "Day 2",      file: "routes/2-day-2.gpx", color: "#7cb342", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-2-days-day-2" },
+  { id: "3d1", group: "3-day", label: "Day 1",      file: "routes/3-day-1.gpx", color: "#ef6c00", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-3-days-day-1" },
+  { id: "3d2", group: "3-day", label: "Day 2",      file: "routes/3-day-2.gpx", color: "#c62828", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-3-days-day-2" },
+  { id: "3d3", group: "3-day", label: "Day 3",      file: "routes/3-day-3.gpx", color: "#6a1b9a", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-3-days-day-3" }
 ];
 
 map.createPane("routesPane");
@@ -352,7 +352,7 @@ Object.keys(byGroup).forEach(function (g) {
   h.textContent = g + " route";
   routesEl.appendChild(h);
   byGroup[g].forEach(function (r) {
-    const row = document.createElement("label");
+    const row = document.createElement("div");
     row.className = "route-row";
     const cb = document.createElement("input");
     cb.type = "checkbox";
@@ -363,9 +363,33 @@ Object.keys(byGroup).forEach(function (g) {
     lab.className = "route-label";
     lab.textContent = r.label;
     cb.addEventListener("change", function (e) { setRouteVisible(r, e.target.checked, e.target); });
+
+    const info = document.createElement("a");
+    info.className = "info-link";
+    info.href = r.info;
+    info.target = "_blank";
+    info.rel = "noopener";
+    info.textContent = "[info]";
+    info.addEventListener("click", function (e) { e.stopPropagation(); });
+
+    const gpx = document.createElement("a");
+    gpx.className = "gpx-link";
+    gpx.href = r.file;
+    gpx.setAttribute("download", "");
+    gpx.textContent = "[gpx]";
+    gpx.addEventListener("click", function (e) { e.stopPropagation(); });
+
     row.appendChild(cb);
     row.appendChild(sw);
     row.appendChild(lab);
+    row.appendChild(info);
+    row.appendChild(gpx);
+
+    row.addEventListener("click", function (e) {
+      if (e.target.closest("a") || e.target === cb) return;
+      cb.checked = !cb.checked;
+      cb.dispatchEvent(new Event("change"));
+    });
     routesEl.appendChild(row);
   });
 });
