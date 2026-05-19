@@ -185,9 +185,15 @@ const html = `<!DOCTYPE html>
     display: flex; flex-direction: column; overflow: hidden;
   }
   #side h1 { font-size: 15px; margin: 0; padding: 14px 16px; background: #0b0e12;
-    border-bottom: 1px solid #2a323c; flex: none; }
+    border-bottom: 1px solid #2a323c; flex: none;
+    display: flex; align-items: center; gap: 10px; }
+  #side h1 .title { flex: 1; min-width: 0; }
   #side h1 a { color: inherit; text-decoration: none; }
   #side h1 a:hover { text-decoration: underline; }
+  .segs-toggle { display: flex; align-items: center; gap: 4px; font-size: 11px;
+    font-weight: 400; text-transform: uppercase; letter-spacing: .06em;
+    color: #8aa0b8; cursor: pointer; user-select: none; }
+  .segs-toggle input { margin: 0; flex: none; }
   #side ul#list { list-style: none; margin: 0; padding: 6px 0;
     flex: 1 1 0; overflow-y: auto; }
   #side li { display: flex; align-items: center; gap: 10px; padding: 7px 14px;
@@ -226,7 +232,10 @@ const html = `<!DOCTYPE html>
 <div id="app">
   <div id="map"></div>
   <div id="side">
-    <h1><a href="https://www.cyclinginflanders.cc/flandrien-challenge" target="_blank" rel="noopener">Flandrien Challenge — ${segments.length} segments</a></h1>
+    <h1>
+      <span class="title"><a href="https://www.cyclinginflanders.cc/flandrien-challenge" target="_blank" rel="noopener">Flandrien Challenge — ${segments.length} segments</a></span>
+      <label class="segs-toggle"><input type="checkbox" id="segs-toggle" checked> show</label>
+    </h1>
     <ul id="list"></ul>
     <div id="routes"></div>
   </div>
@@ -261,6 +270,7 @@ function popupHtml(seg) {
 
 const allBounds = [];
 const layers = {};
+let segmentsVisible = true;
 
 SEGMENTS.forEach(function (seg, idx) {
   if (!seg.coords.length) return;
@@ -330,9 +340,18 @@ SEGMENTS.forEach(function (seg, idx) {
     const L0 = layers[seg.n];
     if (!L0) return;
     map.fitBounds(L0.bounds, { padding: [60, 60], maxZoom: 17 });
-    L0.marker.openPopup();
+    if (segmentsVisible) L0.marker.openPopup();
   });
   list.appendChild(li);
+});
+
+document.getElementById("segs-toggle").addEventListener("change", function (e) {
+  segmentsVisible = e.target.checked;
+  Object.keys(layers).forEach(function (k) {
+    const L0 = layers[k];
+    if (segmentsVisible) { L0.line.addTo(map); L0.marker.addTo(map); }
+    else { map.removeLayer(L0.line); map.removeLayer(L0.marker); }
+  });
 });
 
 const ROUTES = ${JSON.stringify(routes)};

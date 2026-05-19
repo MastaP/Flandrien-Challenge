@@ -16,9 +16,15 @@
     display: flex; flex-direction: column; overflow: hidden;
   }
   #side h1 { font-size: 15px; margin: 0; padding: 14px 16px; background: #0b0e12;
-    border-bottom: 1px solid #2a323c; flex: none; }
+    border-bottom: 1px solid #2a323c; flex: none;
+    display: flex; align-items: center; gap: 10px; }
+  #side h1 .title { flex: 1; min-width: 0; }
   #side h1 a { color: inherit; text-decoration: none; }
   #side h1 a:hover { text-decoration: underline; }
+  .segs-toggle { display: flex; align-items: center; gap: 4px; font-size: 11px;
+    font-weight: 400; text-transform: uppercase; letter-spacing: .06em;
+    color: #8aa0b8; cursor: pointer; user-select: none; }
+  .segs-toggle input { margin: 0; flex: none; }
   #side ul#list { list-style: none; margin: 0; padding: 6px 0;
     flex: 1 1 0; overflow-y: auto; }
   #side li { display: flex; align-items: center; gap: 10px; padding: 7px 14px;
@@ -57,7 +63,10 @@
 <div id="app">
   <div id="map"></div>
   <div id="side">
-    <h1><a href="https://www.cyclinginflanders.cc/flandrien-challenge" target="_blank" rel="noopener">Flandrien Challenge — 59 segments</a></h1>
+    <h1>
+      <span class="title"><a href="https://www.cyclinginflanders.cc/flandrien-challenge" target="_blank" rel="noopener">Flandrien Challenge — 59 segments</a></span>
+      <label class="segs-toggle"><input type="checkbox" id="segs-toggle" checked> show</label>
+    </h1>
     <ul id="list"></ul>
     <div id="routes"></div>
   </div>
@@ -92,6 +101,7 @@ function popupHtml(seg) {
 
 const allBounds = [];
 const layers = {};
+let segmentsVisible = true;
 
 SEGMENTS.forEach(function (seg, idx) {
   if (!seg.coords.length) return;
@@ -161,9 +171,18 @@ SEGMENTS.forEach(function (seg, idx) {
     const L0 = layers[seg.n];
     if (!L0) return;
     map.fitBounds(L0.bounds, { padding: [60, 60], maxZoom: 17 });
-    L0.marker.openPopup();
+    if (segmentsVisible) L0.marker.openPopup();
   });
   list.appendChild(li);
+});
+
+document.getElementById("segs-toggle").addEventListener("change", function (e) {
+  segmentsVisible = e.target.checked;
+  Object.keys(layers).forEach(function (k) {
+    const L0 = layers[k];
+    if (segmentsVisible) { L0.line.addTo(map); L0.marker.addTo(map); }
+    else { map.removeLayer(L0.line); map.removeLayer(L0.marker); }
+  });
 });
 
 const ROUTES = [{"id":"1d","group":"1-day","label":"Full route","file":"routes/1-day.gpx","color":"#1565c0","info":"https://www.cyclinginflanders.cc/routes/flandrien-challenge-1-day","stats":{"distanceM":303693.97086641163,"gainM":3594.7879999999973}},{"id":"2d1","group":"2-day","label":"Day 1","file":"routes/2-day-1.gpx","color":"#2e7d32","info":"https://www.cyclinginflanders.cc/routes/flandrien-challenge-2-days-day-1","stats":{"distanceM":211807.84236031774,"gainM":1744.8879999999997}},{"id":"2d2","group":"2-day","label":"Day 2","file":"routes/2-day-2.gpx","color":"#7cb342","info":"https://www.cyclinginflanders.cc/routes/flandrien-challenge-2-days-day-2","stats":{"distanceM":185225.97909020292,"gainM":2507.022000000001}},{"id":"3d1","group":"3-day","label":"Day 1","file":"routes/3-day-1.gpx","color":"#ef6c00","info":"https://www.cyclinginflanders.cc/routes/flandrien-challenge-3-days-day-1","stats":{"distanceM":74822.50501708529,"gainM":764.6705000000001}},{"id":"3d2","group":"3-day","label":"Day 2","file":"routes/3-day-2.gpx","color":"#c62828","info":"https://www.cyclinginflanders.cc/routes/flandrien-challenge-3-days-day-2","stats":{"distanceM":189713.02482067398,"gainM":2008.0640000000003}},{"id":"3d3","group":"3-day","label":"Day 3","file":"routes/3-day-3.gpx","color":"#6a1b9a","info":"https://www.cyclinginflanders.cc/routes/flandrien-challenge-3-days-day-3","stats":{"distanceM":142162.8911354513,"gainM":1938.7600000000002}}];
