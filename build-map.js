@@ -102,6 +102,41 @@ function computeStats(pts) {
   };
 }
 
+function computeRouteStats(pts) {
+  if (pts.length < 2) return { distanceM: 0, gainM: null };
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) total += haversine(pts[i - 1], pts[i]);
+  let gainM = null;
+  if (pts.every((p) => p.ele != null)) {
+    const eS = smooth(pts.map((p) => p.ele), 2);
+    const T = 3; // metres — hysteresis threshold to suppress GPS noise
+    let g = 0;
+    let ref = eS[0];
+    for (let i = 1; i < eS.length; i++) {
+      const diff = eS[i] - ref;
+      if (diff > T) { g += diff; ref = eS[i]; }
+      else if (eS[i] < ref) { ref = eS[i]; }
+    }
+    gainM = g;
+  }
+  return { distanceM: total, gainM };
+}
+
+const ROUTES_META = [
+  { id: "1d",  group: "1-day", label: "Full route", file: "routes/1-day.gpx",   color: "#1565c0", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-1-day" },
+  { id: "2d1", group: "2-day", label: "Day 1",      file: "routes/2-day-1.gpx", color: "#2e7d32", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-2-days-day-1" },
+  { id: "2d2", group: "2-day", label: "Day 2",      file: "routes/2-day-2.gpx", color: "#7cb342", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-2-days-day-2" },
+  { id: "3d1", group: "3-day", label: "Day 1",      file: "routes/3-day-1.gpx", color: "#ef6c00", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-3-days-day-1" },
+  { id: "3d2", group: "3-day", label: "Day 2",      file: "routes/3-day-2.gpx", color: "#c62828", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-3-days-day-2" },
+  { id: "3d3", group: "3-day", label: "Day 3",      file: "routes/3-day-3.gpx", color: "#6a1b9a", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-3-days-day-3" }
+];
+
+const routes = ROUTES_META.map((r) => {
+  const xml = fs.readFileSync(path.join(dir, r.file), "utf8");
+  const pts = parsePoints(xml);
+  return Object.assign({}, r, { stats: computeRouteStats(pts) });
+});
+
 const segments = files.map((file) => {
   const xml = fs.readFileSync(path.join(gpxDir, file), "utf8");
   const pts = parsePoints(xml);
@@ -129,6 +164,8 @@ const noLink = segments.filter((s) => !s.link);
 if (noLink.length) console.log("WARNING: no link for:", noLink.map((s) => s.n + " " + s.name).join(", "));
 else console.log("All " + segments.length + " segments have a description link.");
 console.log("Sample:", segments[0].n, segments[0].name, JSON.stringify(segments[0].stats));
+console.log("Route stats:");
+routes.forEach((r) => console.log("  " + r.id + " " + r.group + " " + r.label + ":", JSON.stringify(r.stats)));
 
 const html = `<!DOCTYPE html>
 <html lang="en">
@@ -160,12 +197,15 @@ const html = `<!DOCTYPE html>
     padding-bottom: 10px; max-height: 45%; overflow-y: auto; }
   .route-group-h { font-size: 11px; text-transform: uppercase;
     letter-spacing: .06em; color: #8aa0b8; padding: 10px 14px 4px; }
+  .route-group-total { text-transform: none; letter-spacing: 0; color: #637589; }
   .route-row { display: flex; align-items: center; gap: 10px;
     padding: 5px 14px; cursor: pointer; font-size: 13px; }
   .route-row:hover { background: #1d2630; }
   .route-row input[type=checkbox] { margin: 0; flex: none; }
   .swatch { width: 22px; height: 5px; border-radius: 3px; flex: none; }
-  .route-label { flex: 1; }
+  .route-text { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+  .route-label { }
+  .route-stats { font-size: 11px; color: #8aa0b8; }
   .badge { flex: none; width: 24px; height: 24px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
     font-size: 11px; font-weight: 700; color: #fff; }
@@ -295,14 +335,17 @@ SEGMENTS.forEach(function (seg, idx) {
   list.appendChild(li);
 });
 
-const ROUTES = [
-  { id: "1d",  group: "1-day", label: "Full route", file: "routes/1-day.gpx",   color: "#1565c0", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-1-day" },
-  { id: "2d1", group: "2-day", label: "Day 1",      file: "routes/2-day-1.gpx", color: "#2e7d32", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-2-days-day-1" },
-  { id: "2d2", group: "2-day", label: "Day 2",      file: "routes/2-day-2.gpx", color: "#7cb342", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-2-days-day-2" },
-  { id: "3d1", group: "3-day", label: "Day 1",      file: "routes/3-day-1.gpx", color: "#ef6c00", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-3-days-day-1" },
-  { id: "3d2", group: "3-day", label: "Day 2",      file: "routes/3-day-2.gpx", color: "#c62828", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-3-days-day-2" },
-  { id: "3d3", group: "3-day", label: "Day 3",      file: "routes/3-day-3.gpx", color: "#6a1b9a", info: "https://www.cyclinginflanders.cc/routes/flandrien-challenge-3-days-day-3" }
-];
+const ROUTES = ${JSON.stringify(routes)};
+
+function fmtKm(m) {
+  if (m == null) return "n/a";
+  const km = m / 1000;
+  return km >= 100 ? Math.round(km) + " km" : km.toFixed(1) + " km";
+}
+function fmtGain(m) {
+  if (m == null) return "n/a";
+  return Math.round(m) + " m";
+}
 
 map.createPane("routesPane");
 map.getPane("routesPane").style.zIndex = 350;
@@ -330,7 +373,7 @@ async function setRouteVisible(route, on, checkbox) {
         routeLayers[route.id] = L.polyline(coords, {
           color: route.color, weight: 5, opacity: 0.75,
           pane: "routesPane"
-        }).bindTooltip(route.group + " — " + route.label, { sticky: true });
+        }).bindTooltip(route.group + " — " + route.label + " · " + fmtKm(route.stats.distanceM) + " · " + fmtGain(route.stats.gainM) + " ↑", { sticky: true });
       } catch (e) {
         console.error("route load failed", route.file, e);
         checkbox.checked = false;
@@ -347,11 +390,23 @@ const routesEl = document.getElementById("routes");
 const byGroup = {};
 ROUTES.forEach(function (r) { (byGroup[r.group] = byGroup[r.group] || []).push(r); });
 Object.keys(byGroup).forEach(function (g) {
+  const group = byGroup[g];
   const h = document.createElement("div");
   h.className = "route-group-h";
-  h.textContent = g + " route";
+  const nameSpan = document.createElement("span");
+  nameSpan.textContent = g + " route";
+  h.appendChild(nameSpan);
+  if (group.length > 1) {
+    const totDist = group.reduce(function (a, r) { return a + (r.stats.distanceM || 0); }, 0);
+    const someNullGain = group.some(function (r) { return r.stats.gainM == null; });
+    const totGain = someNullGain ? null : group.reduce(function (a, r) { return a + r.stats.gainM; }, 0);
+    const tot = document.createElement("span");
+    tot.className = "route-group-total";
+    tot.textContent = " · " + fmtKm(totDist) + " · " + fmtGain(totGain) + " ↑";
+    h.appendChild(tot);
+  }
   routesEl.appendChild(h);
-  byGroup[g].forEach(function (r) {
+  group.forEach(function (r) {
     const row = document.createElement("div");
     row.className = "route-row";
     const cb = document.createElement("input");
@@ -359,9 +414,16 @@ Object.keys(byGroup).forEach(function (g) {
     const sw = document.createElement("span");
     sw.className = "swatch";
     sw.style.background = r.color;
+    const text = document.createElement("span");
+    text.className = "route-text";
     const lab = document.createElement("span");
     lab.className = "route-label";
     lab.textContent = r.label;
+    const stats = document.createElement("span");
+    stats.className = "route-stats";
+    stats.textContent = fmtKm(r.stats.distanceM) + " · " + fmtGain(r.stats.gainM) + " ↑";
+    text.appendChild(lab);
+    text.appendChild(stats);
     cb.addEventListener("change", function (e) { setRouteVisible(r, e.target.checked, e.target); });
 
     const info = document.createElement("a");
@@ -381,7 +443,7 @@ Object.keys(byGroup).forEach(function (g) {
 
     row.appendChild(cb);
     row.appendChild(sw);
-    row.appendChild(lab);
+    row.appendChild(text);
     row.appendChild(info);
     row.appendChild(gpx);
 
