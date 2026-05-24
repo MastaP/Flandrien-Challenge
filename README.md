@@ -30,6 +30,8 @@ profile that follows your cursor.
 |---|---|
 | `index.html` | The whole app — a single self-contained page. Generated. |
 | `build-map.js` | Build script. Reads the GPX folders, computes stats, writes `index.html`. |
+| `lib/coverage.js` | Shared GPX parsing + activity-coverage algorithm. Inlined into `index.html` by the build, and imported directly by the tests. |
+| `test/coverage.test.js` | Test suite. Verifies that the official 1/2/3-day route GPX files match all 59 segments. |
 | `gpx/NN-Name.gpx` | One GPX per segment. `NN` is the frozen segment number. |
 | `routes/*.gpx` | Route overlays: `1-day.gpx`, `2-day-1.gpx`, `2-day-2.gpx`, `3-day-1.gpx`, `3-day-2.gpx`, `3-day-3.gpx`. |
 | `links.json` | Maps each segment number to its description page on cyclinginflanders.cc. |
@@ -56,6 +58,18 @@ The script:
 
 The page itself depends only on Leaflet (loaded from a CDN) and
 OpenStreetMap tiles.
+
+## Tests
+
+```sh
+node --test test/coverage.test.js
+```
+
+Uses Node's built-in `node:test` runner — no install needed. Exercises the
+activity-coverage detection against the official route GPX files as ground
+truth: the 1-day route must mark all 59 segments, and the 2-day and 3-day
+routes (combined) must each mark all 59. Also covers parser edge cases and
+the direction-agnostic match.
 
 ## Updating
 

@@ -5,42 +5,17 @@
 
 const fs = require("fs");
 const path = require("path");
+const { haversineLL, parseTrkpts } = require("./lib/coverage");
 
 const dir = __dirname;
 const gpxDir = path.join(dir, "gpx");
+const coverageJs = fs.readFileSync(path.join(dir, "lib/coverage.js"), "utf8");
 const links = JSON.parse(fs.readFileSync(path.join(dir, "links.json"), "utf8"));
 
 const files = fs
   .readdirSync(gpxDir)
   .filter((f) => f.toLowerCase().endsWith(".gpx"))
   .sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
-
-function parsePoints(xml) {
-  const pts = [];
-  const re = /<trkpt\b([^>]*?)\/?>([\s\S]*?)<\/trkpt>|<trkpt\b([^>]*?)\/>/g;
-  let m;
-  while ((m = re.exec(xml)) !== null) {
-    const attrs = m[1] !== undefined ? m[1] : m[3];
-    const inner = m[2] || "";
-    const lat = parseFloat((attrs.match(/\blat="([-\d.]+)"/) || [])[1]);
-    const lon = parseFloat((attrs.match(/\blon="([-\d.]+)"/) || [])[1]);
-    const eleM = inner.match(/<ele>([-\d.]+)<\/ele>/);
-    if (Number.isNaN(lat) || Number.isNaN(lon)) continue;
-    pts.push({ lat, lon, ele: eleM ? parseFloat(eleM[1]) : null });
-  }
-  return pts;
-}
-
-function haversine(a, b) {
-  const R = 6371000;
-  const toRad = (d) => (d * Math.PI) / 180;
-  const dLat = toRad(b.lat - a.lat);
-  const dLon = toRad(b.lon - a.lon);
-  const s =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(s));
-}
 
 function smooth(vals, radius) {
   return vals.map((_, i) => {
@@ -59,7 +34,7 @@ function smooth(vals, radius) {
 function computeStats(pts) {
   const cum = [0];
   for (let i = 1; i < pts.length; i++) {
-    cum[i] = cum[i - 1] + haversine(pts[i - 1], pts[i]);
+    cum[i] = cum[i - 1] + haversineLL(pts[i - 1], pts[i]);
   }
   const total = cum[cum.length - 1] || 0;
 
@@ -105,7 +80,7 @@ function computeStats(pts) {
 function computeRouteStats(pts) {
   if (pts.length < 2) return { distanceM: 0, gainM: null };
   let total = 0;
-  for (let i = 1; i < pts.length; i++) total += haversine(pts[i - 1], pts[i]);
+  for (let i = 1; i < pts.length; i++) total += haversineLL(pts[i - 1], pts[i]);
   let gainM = null;
   if (pts.every((p) => p.ele != null)) {
     const eS = smooth(pts.map((p) => p.ele), 2);
@@ -133,13 +108,13 @@ const ROUTES_META = [
 
 const routes = ROUTES_META.map((r) => {
   const xml = fs.readFileSync(path.join(dir, r.file), "utf8");
-  const pts = parsePoints(xml);
+  const pts = parseTrkpts(xml);
   return Object.assign({}, r, { stats: computeRouteStats(pts) });
 });
 
 const segments = files.map((file) => {
   const xml = fs.readFileSync(path.join(gpxDir, file), "utf8");
-  const pts = parsePoints(xml);
+  const pts = parseTrkpts(xml);
   const n = parseInt(file, 10);
   const name = file
     .replace(/\.gpx$/i, "")
@@ -241,6 +216,47 @@ const html = `<!DOCTYPE html>
   .pop td { padding: 1px 0; }
   .pop td:first-child { color: #666; padding-right: 14px; }
   .pop a { display: block; margin-top: 7px; color: #1769ff; }
+  /* Activity upload */
+  .activity-section { background: #0b0e12; border-bottom: 1px solid #2a323c;
+    padding: 10px 14px; flex: none; max-height: 40%; overflow-y: auto; }
+  .activity-upload-btn { display: block; width: 100%; padding: 8px 10px;
+    background: #1d2630; color: #e6e6e6; border: 1px solid #2a323c;
+    border-radius: 4px; cursor: pointer; font-size: 12px; font-family: inherit; }
+  .activity-upload-btn:hover { background: #25313d; border-color: #3a4654; }
+  .activity-upload-btn:disabled { opacity: .6; cursor: default; }
+  .activity-hint { color: #8aa0b8; font-size: 11px; margin-top: 6px; text-align: center; }
+  .activity-summary { font-size: 12px; color: #e6e6e6; margin-top: 10px; }
+  .activity-summary b { color: #66bb6a; }
+  .activity-list { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .activity-item { display: flex; align-items: flex-start; gap: 8px;
+    padding: 6px 8px; border: 1px solid #2a323c; border-radius: 4px;
+    background: #11161c; font-size: 12px; }
+  .activity-item.is-hidden { opacity: .55; }
+  .activity-check { margin: 3px 0 0 0; flex: none; }
+  .activity-swatch { width: 14px; height: 14px; border-radius: 3px; flex: none; margin-top: 2px; }
+  .activity-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .activity-info-name { color: #e6e6e6; word-break: break-all; }
+  .activity-info-stats { color: #8aa0b8; font-size: 11px; }
+  .activity-remove { flex: none; background: transparent; border: none;
+    color: #8aa0b8; cursor: pointer; padding: 0 4px; font-size: 16px;
+    line-height: 1; font-family: inherit; }
+  .activity-remove:hover { color: #ef5350; }
+  /* Per-segment coverage marks */
+  .seg-cover-dots { display: flex; gap: 2px; flex: none; align-items: center; margin-left: -2px; }
+  .seg-cover-dot { width: 7px; height: 7px; border-radius: 50%; flex: none;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.4); }
+  /* Distance markers along a route */
+  .km-marker { width: 32px; height: 14px; display: flex; align-items: center;
+    justify-content: center; color: #fff; font-size: 10px; font-weight: 700;
+    border-radius: 7px; box-sizing: border-box;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.75), 0 0 3px rgba(0,0,0,.5);
+    pointer-events: none; }
+  /* Start/finish markers at route endpoints */
+  .route-endpoint { width: 22px; height: 22px; display: flex; align-items: center;
+    justify-content: center; color: #fff; font-size: 12px; font-weight: 800;
+    border-radius: 4px;
+    box-shadow: 0 0 0 2px #fff, 0 0 5px rgba(0,0,0,.55);
+    pointer-events: none; }
 </style>
 </head>
 <body>
@@ -254,11 +270,26 @@ const html = `<!DOCTYPE html>
       <span class="title"><a href="https://www.cyclinginflanders.cc/flandrien-challenge" target="_blank" rel="noopener">Flandrien Challenge — ${segments.length} segments</a></span>
       <label class="segs-toggle"><input type="checkbox" id="segs-toggle" checked> show</label>
     </h1>
+    <div class="activity-section">
+      <input type="file" id="activity-file" accept=".gpx,application/gpx+xml" multiple style="display:none">
+      <button class="activity-upload-btn" id="activity-upload">Upload activity GPX</button>
+      <div class="activity-hint">Pick one or more files. Not stored — refresh to clear.</div>
+      <div class="activity-summary" id="activity-summary" style="display:none">
+        <b id="activity-unique-count">0</b> / ${segments.length} unique segments covered
+      </div>
+      <div class="activity-list" id="activity-list"></div>
+    </div>
     <ul id="list"></ul>
     <div id="routes"></div>
   </div>
 </div>
 <script>
+// --- inlined from lib/coverage.js (single source of truth, also imported by tests) ---
+// Brings haversineLL, parseTrkpts, computeCoverage, activityStats into this scope
+// as top-level function declarations.
+${coverageJs}
+// ----------------------------------------------------------------------------
+
 const SEGMENTS = ${JSON.stringify(segments)};
 
 const map = L.map("map");
@@ -322,6 +353,7 @@ map.fitBounds(L.latLngBounds(allBounds), { padding: [30, 30] });
 const list = document.getElementById("list");
 SEGMENTS.forEach(function (seg, idx) {
   const li = document.createElement("li");
+  li.dataset.segN = String(seg.n);
   const color = colorFor(idx, SEGMENTS.length);
 
   const badge = document.createElement("span");
@@ -333,8 +365,12 @@ SEGMENTS.forEach(function (seg, idx) {
   label.className = "seg-label";
   label.textContent = seg.name + (seg.coords.length ? "" : " (no data)");
 
+  const dots = document.createElement("span");
+  dots.className = "seg-cover-dots";
+
   li.appendChild(badge);
   li.appendChild(label);
+  li.appendChild(dots);
 
   if (seg.link) {
     const info = document.createElement("a");
@@ -370,6 +406,7 @@ document.getElementById("segs-toggle").addEventListener("change", function (e) {
     if (segmentsVisible) { L0.line.addTo(map); L0.marker.addTo(map); }
     else { map.removeLayer(L0.line); map.removeLayer(L0.marker); }
   });
+  if (segmentsVisible) updateSegmentMarks();
 });
 
 const ROUTES = ${JSON.stringify(routes)};
@@ -386,45 +423,77 @@ function fmtGain(m) {
 
 map.createPane("routesPane");
 map.getPane("routesPane").style.zIndex = 350;
+map.createPane("routeMarkersPane");
+map.getPane("routeMarkersPane").style.zIndex = 590; // above route polylines, below default markers (segment badges)
 
 const routeLayers = {};
 const routeData = {}; // id -> { pts:[{lat,lon,ele}], cum:[m...], totalM }
-
-function haversineLL(a, b) {
-  const R = 6371000;
-  const toRad = (d) => (d * Math.PI) / 180;
-  const dLat = toRad(b.lat - a.lat);
-  const dLon = toRad(b.lon - a.lon);
-  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(s));
-}
+const routeMarkers = {}; // id -> [L.marker, ...] — 5-km labels + S/F endpoints
 
 async function loadRouteData(file) {
   const res = await fetch(file);
   const xml = await res.text();
-  const pts = [];
-  const re = /<trkpt[^>]*lat="([-0-9.eE+]+)"[^>]*lon="([-0-9.eE+]+)"|<trkpt[^>]*lon="([-0-9.eE+]+)"[^>]*lat="([-0-9.eE+]+)"/g;
-  let m;
-  while ((m = re.exec(xml)) !== null) {
-    const lat = parseFloat(m[1] !== undefined ? m[1] : m[4]);
-    const lon = parseFloat(m[2] !== undefined ? m[2] : m[3]);
-    if (isNaN(lat) || isNaN(lon)) continue;
-    // look up to ~120 chars ahead for the matching <ele>...</ele>
-    const window = xml.substr(re.lastIndex, 140);
-    let ele = null;
-    const a = window.indexOf("<ele>");
-    if (a >= 0) {
-      const b = window.indexOf("</ele>", a + 5);
-      if (b > a + 5) {
-        const v = parseFloat(window.substring(a + 5, b));
-        if (!isNaN(v)) ele = v;
-      }
-    }
-    pts.push({ lat, lon, ele });
-  }
+  const pts = parseTrkpts(xml);
   const cum = [0];
   for (let i = 1; i < pts.length; i++) cum[i] = cum[i - 1] + haversineLL(pts[i - 1], pts[i]);
   return { pts, cum, totalM: cum[cum.length - 1] || 0 };
+}
+
+// 5-km distance labels (showing direction by increasing number) plus S/F
+// endpoints. Skips km labels within 1 km of the finish so they don't sit
+// on top of the F marker. Used by both official routes and uploaded
+// activities; pts is an array of {lat, lon} objects.
+function buildDistanceMarkers(pts, color) {
+  const out = [];
+  if (!pts || pts.length < 2) return out;
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum[i] = cum[i - 1] + haversineLL(pts[i - 1], pts[i]);
+  const totalM = cum[cum.length - 1] || 0;
+
+  for (let km = 5; km * 1000 < totalM - 1000; km += 5) {
+    const target = km * 1000;
+    let idx = 0;
+    while (idx < cum.length - 1 && cum[idx + 1] < target) idx++;
+    let lat, lon;
+    if (idx >= pts.length - 1) {
+      lat = pts[pts.length - 1].lat;
+      lon = pts[pts.length - 1].lon;
+    } else {
+      const denom = (cum[idx + 1] - cum[idx]) || 1;
+      const t = (target - cum[idx]) / denom;
+      lat = pts[idx].lat + t * (pts[idx + 1].lat - pts[idx].lat);
+      lon = pts[idx].lon + t * (pts[idx + 1].lon - pts[idx].lon);
+    }
+    out.push(L.marker([lat, lon], {
+      pane: "routeMarkersPane",
+      interactive: false,
+      keyboard: false,
+      icon: L.divIcon({
+        className: "",
+        html: '<div class="km-marker" style="background:' + color + ';">' + km + '</div>',
+        iconSize: [32, 14],
+        iconAnchor: [16, 7],
+      }),
+    }));
+  }
+
+  function endpoint(p, letter) {
+    return L.marker([p.lat, p.lon], {
+      pane: "routeMarkersPane",
+      interactive: false,
+      keyboard: false,
+      icon: L.divIcon({
+        className: "",
+        html: '<div class="route-endpoint" style="background:' + color + ';">' + letter + '</div>',
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
+      }),
+    });
+  }
+  // Add S/F last so they render above any nearby km labels.
+  out.push(endpoint(pts[0], "S"));
+  out.push(endpoint(pts[pts.length - 1], "F"));
+  return out;
 }
 
 async function setRouteVisible(route, on, checkbox) {
@@ -436,9 +505,10 @@ async function setRouteVisible(route, on, checkbox) {
         routeData[route.id] = data;
         const coords = data.pts.map((p) => [p.lat, p.lon]);
         routeLayers[route.id] = L.polyline(coords, {
-          color: route.color, weight: 5, opacity: 0.75,
+          color: track.color, weight: 5, opacity: 0.75,
           pane: "routesPane"
         }).bindTooltip(route.group + " — " + route.label + " · " + fmtKm(route.stats.distanceM) + " · " + fmtGain(route.stats.gainM) + " ↑", { sticky: true });
+        routeMarkers[route.id] = buildDistanceMarkers(data.pts, track.color);
       } catch (e) {
         console.error("route load failed", route.file, e);
         checkbox.checked = false;
@@ -446,8 +516,10 @@ async function setRouteVisible(route, on, checkbox) {
       } finally { checkbox.disabled = false; }
     }
     routeLayers[route.id].addTo(map);
+    routeMarkers[route.id].forEach((m) => m.addTo(map));
   } else if (routeLayers[route.id]) {
     map.removeLayer(routeLayers[route.id]);
+    if (routeMarkers[route.id]) routeMarkers[route.id].forEach((m) => map.removeLayer(m));
   }
   updateProfile();
 }
@@ -455,7 +527,7 @@ async function setRouteVisible(route, on, checkbox) {
 const profileEl = document.getElementById("profile");
 const mapAreaEl = document.getElementById("map-area");
 let profileMarker = null;
-let currentProfileRouteId = null;
+let currentProfileTrackId = null;
 
 function findIndexForDistance(cum, d) {
   let lo = 0, hi = cum.length - 1;
@@ -466,10 +538,9 @@ function findIndexForDistance(cum, d) {
   return lo;
 }
 
-function renderProfile(route) {
-  const data = routeData[route.id];
-  if (!data || data.pts.length < 2) { hideProfile(); return; }
-  const pts = data.pts, cum = data.cum, totalM = data.totalM;
+function renderProfile(track) {
+  const pts = track.pts, cum = track.cum, totalM = track.totalM;
+  if (!pts || pts.length < 2) { hideProfile(); return; }
   let eMin = Infinity, eMax = -Infinity;
   for (let i = 0; i < pts.length; i++) {
     const e = pts[i].ele;
@@ -514,16 +585,16 @@ function renderProfile(route) {
 
   const html =
     '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' +
-    '<path d="' + fillD + '" fill="' + route.color + '" fill-opacity="0.22" />' +
-    '<path d="' + pathD + '" fill="none" stroke="' + route.color + '" stroke-width="1.5" />' +
+    '<path d="' + fillD + '" fill="' + track.color + '" fill-opacity="0.22" />' +
+    '<path d="' + pathD + '" fill="none" stroke="' + track.color + '" stroke-width="1.5" />' +
     '<line x1="' + PAD_L + '" y1="' + baseY + '" x2="' + (W - PAD_R) + '" y2="' + baseY + '" stroke="#3a4654" />' +
     '<text x="' + (PAD_L - 6) + '" y="' + (PAD_T + 4) + '" text-anchor="end" fill="#8aa0b8" font-size="10">' + Math.round(eMax) + ' m</text>' +
     '<text x="' + (PAD_L - 6) + '" y="' + (PAD_T + innerH) + '" text-anchor="end" fill="#8aa0b8" font-size="10">' + Math.round(eMin) + ' m</text>' +
     xLabels +
-    '<text x="' + PAD_L + '" y="13" fill="#e6e6e6" font-size="11">' + route.group + ' — ' + route.label + ' · ' + fmtKm(totalM) + ' · ' + fmtGain(route.stats.gainM) + ' ↑</text>' +
+    '<text x="' + PAD_L + '" y="13" fill="#e6e6e6" font-size="11">' + track.title + ' · ' + fmtKm(totalM) + ' · ' + fmtGain(track.gainM) + ' ↑</text>' +
     '<g id="profile-cursor" style="display:none;">' +
     '<line id="profile-cursor-line" x1="0" y1="' + PAD_T + '" x2="0" y2="' + (PAD_T + innerH) + '" stroke="#fff" stroke-width="1" stroke-dasharray="2 2" opacity="0.6" />' +
-    '<circle id="profile-cursor-dot" cx="0" cy="0" r="3.5" fill="' + route.color + '" stroke="#fff" stroke-width="1" />' +
+    '<circle id="profile-cursor-dot" cx="0" cy="0" r="3.5" fill="' + track.color + '" stroke="#fff" stroke-width="1" />' +
     '<text id="profile-cursor-label" x="0" y="' + (PAD_T + innerH - 4) + '" text-anchor="middle" fill="#fff" font-size="10" font-weight="600"></text>' +
     '</g>' +
     '</svg>';
@@ -531,7 +602,7 @@ function renderProfile(route) {
   profileEl.innerHTML = html;
   profileEl.classList.remove("hidden");
   mapAreaEl.classList.add("profile-on");
-  currentProfileRouteId = route.id;
+  currentProfileTrackId = track.id;
 
   const svgEl = profileEl.querySelector("svg");
   const cursorG = profileEl.querySelector("#profile-cursor");
@@ -562,11 +633,11 @@ function renderProfile(route) {
     cursorLabel.textContent = (cum[idx] / 1000).toFixed(1) + " km · " + Math.round(p.ele) + " m";
     if (!profileMarker) {
       profileMarker = L.circleMarker([p.lat, p.lon], {
-        radius: 7, color: "#fff", weight: 2, fillColor: route.color, fillOpacity: 1, interactive: false
+        radius: 7, color: "#fff", weight: 2, fillColor: track.color, fillOpacity: 1, interactive: false
       }).addTo(map);
     } else {
       profileMarker.setLatLng([p.lat, p.lon]);
-      profileMarker.setStyle({ opacity: 1, fillOpacity: 1, color: "#fff", fillColor: route.color });
+      profileMarker.setStyle({ opacity: 1, fillOpacity: 1, color: "#fff", fillColor: track.color });
     }
   }
   function onLeave() {
@@ -580,13 +651,55 @@ function renderProfile(route) {
 function hideProfile() {
   profileEl.classList.add("hidden");
   mapAreaEl.classList.remove("profile-on");
-  currentProfileRouteId = null;
+  currentProfileTrackId = null;
   if (profileMarker) { map.removeLayer(profileMarker); profileMarker = null; }
 }
 
+// Tracks eligible for the elevation profile: visible official routes plus
+// visible uploaded activities, normalised to a common shape. The profile
+// renders only when exactly one of these is visible.
+function visibleTracks() {
+  const out = [];
+  ROUTES.forEach(function (r) {
+    if (routeLayers[r.id] && map.hasLayer(routeLayers[r.id])) {
+      const data = routeData[r.id];
+      out.push({
+        id: "route-" + r.id,
+        color: r.color,
+        title: r.group + " — " + r.label,
+        pts: data.pts,
+        cum: data.cum,
+        totalM: data.totalM,
+        gainM: r.stats.gainM,
+      });
+    }
+  });
+  activities.forEach(function (a) {
+    if (a.visible === false) return;
+    if (!a.cum) {
+      // Lazy cumulative-distance build for the activity track.
+      a.cum = [0];
+      for (let i = 1; i < a.pts.length; i++) {
+        a.cum[i] = a.cum[i - 1] + haversineLL(a.pts[i - 1], a.pts[i]);
+      }
+      a.totalM = a.cum[a.cum.length - 1] || 0;
+    }
+    out.push({
+      id: "activity-" + a.id,
+      color: a.color,
+      title: a.name,
+      pts: a.pts,
+      cum: a.cum,
+      totalM: a.totalM,
+      gainM: a.stats.gainM,
+    });
+  });
+  return out;
+}
+
 function updateProfile() {
-  const onRoutes = ROUTES.filter(function (r) { return routeLayers[r.id] && map.hasLayer(routeLayers[r.id]); });
-  if (onRoutes.length === 1) renderProfile(onRoutes[0]);
+  const tracks = visibleTracks();
+  if (tracks.length === 1) renderProfile(tracks[0]);
   else hideProfile();
 }
 
@@ -594,10 +707,10 @@ let resizeT;
 window.addEventListener("resize", function () {
   clearTimeout(resizeT);
   resizeT = setTimeout(function () {
-    if (currentProfileRouteId) {
-      const r = ROUTES.find(function (rr) { return rr.id === currentProfileRouteId; });
-      if (r) renderProfile(r);
-    }
+    if (!currentProfileTrackId) return;
+    const track = visibleTracks().find(function (t) { return t.id === currentProfileTrackId; });
+    if (track) renderProfile(track);
+    else hideProfile();
   }, 100);
 });
 
@@ -670,6 +783,231 @@ Object.keys(byGroup).forEach(function (g) {
     routesEl.appendChild(row);
   });
 });
+
+// ===== Activity upload (in-browser, non-persistent, multi-activity) =====
+const activityFileEl = document.getElementById("activity-file");
+const activityUploadBtn = document.getElementById("activity-upload");
+const activitySummaryEl = document.getElementById("activity-summary");
+const activityUniqueCountEl = document.getElementById("activity-unique-count");
+const activityListEl = document.getElementById("activity-list");
+
+map.createPane("activityPane");
+map.getPane("activityPane").style.zIndex = 380; // above routes (350), below default overlays (400)
+
+// Bright, visually distinct colours. Stable per activity: each upload gets
+// the next colour by monotonically incrementing index, so removing an
+// activity never reshuffles the others.
+const ACTIVITY_PALETTE = [
+  "#ef5350", "#42a5f5", "#66bb6a", "#ffa726", "#ab47bc",
+  "#26c6da", "#ec407a", "#d4e157", "#5c6bc0", "#26a69a",
+];
+
+const activities = []; // [{ id, name, color, layer, covered:Set<n>, stats }]
+let nextActivityId = 1;
+let nextColorIndex = 0;
+
+activityUploadBtn.addEventListener("click", function () { activityFileEl.click(); });
+activityFileEl.addEventListener("change", onActivityFiles);
+
+async function onActivityFiles(e) {
+  const files = Array.from(e.target.files || []);
+  e.target.value = ""; // allow re-upload of the same file
+  if (!files.length) return;
+  activityUploadBtn.disabled = true;
+  const originalLabel = activityUploadBtn.textContent;
+  activityUploadBtn.textContent = files.length > 1
+    ? "Reading " + files.length + " files…"
+    : "Reading…";
+  try {
+    for (const file of files) {
+      try {
+        const text = await file.text();
+        const pts = parseTrkpts(text);
+        if (pts.length < 2) {
+          alert("No usable trackpoints found in " + file.name + ".");
+          continue;
+        }
+        addActivity(file.name, pts);
+      } catch (err) {
+        console.error(err);
+        alert("Failed to read " + file.name + ": " + err.message);
+      }
+    }
+  } finally {
+    activityUploadBtn.disabled = false;
+    activityUploadBtn.textContent = originalLabel;
+  }
+}
+
+function decimateForDisplay(pts, maxPoints) {
+  if (pts.length <= maxPoints) return pts;
+  const step = Math.ceil(pts.length / maxPoints);
+  const out = [];
+  for (let i = 0; i < pts.length; i += step) out.push(pts[i]);
+  if (out[out.length - 1] !== pts[pts.length - 1]) out.push(pts[pts.length - 1]);
+  return out;
+}
+
+function addActivity(name, pts) {
+  const id = nextActivityId++;
+  const color = ACTIVITY_PALETTE[nextColorIndex++ % ACTIVITY_PALETTE.length];
+  const display = decimateForDisplay(pts, 6000);
+  const coords = display.map(function (p) { return [p.lat, p.lon]; });
+  const layer = L.polyline(coords, {
+    color: color, weight: 4, opacity: 0.85,
+    dashArray: "6 4", pane: "activityPane"
+  }).bindTooltip(name, { sticky: true }).addTo(map);
+
+  // S/F + 5-km labels along the activity. Use the original (non-decimated)
+  // points so distances are accurate.
+  const markers = buildDistanceMarkers(pts, color);
+  markers.forEach((m) => m.addTo(map));
+
+  const stats = activityStats(pts);
+  const covered = computeCoverage(pts, SEGMENTS);
+
+  // Retain pts so the elevation profile can render this activity later.
+  activities.push({ id, name, color, layer, markers, covered, stats, visible: true, pts });
+  renderActivities();
+  fitMapToActivities();
+  updateProfile();
+}
+
+function removeActivity(id) {
+  const idx = activities.findIndex((a) => a.id === id);
+  if (idx < 0) return;
+  map.removeLayer(activities[idx].layer);
+  activities[idx].markers.forEach((m) => map.removeLayer(m));
+  activities.splice(idx, 1);
+  renderActivities();
+  updateProfile();
+}
+
+function setActivityVisible(a, visible) {
+  if (a.visible === visible) return;
+  a.visible = visible;
+  if (visible) {
+    a.layer.addTo(map);
+    a.markers.forEach((m) => m.addTo(map));
+  } else {
+    map.removeLayer(a.layer);
+    a.markers.forEach((m) => map.removeLayer(m));
+  }
+  renderActivities();
+  updateProfile();
+}
+
+function fitMapToActivities() {
+  const visible = activities.filter((a) => a.visible !== false);
+  if (!visible.length) return;
+  const all = L.featureGroup(visible.map((a) => a.layer));
+  const b = all.getBounds();
+  if (b.isValid()) map.fitBounds(b, { padding: [30, 30] });
+}
+
+function renderActivities() {
+  activityListEl.innerHTML = "";
+  activities.forEach(function (a) {
+    const item = document.createElement("div");
+    item.className = "activity-item" + (a.visible === false ? " is-hidden" : "");
+
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.className = "activity-check";
+    cb.checked = a.visible !== false;
+    cb.title = "Show/hide on map";
+    cb.addEventListener("change", function (e) { setActivityVisible(a, e.target.checked); });
+
+    const sw = document.createElement("span");
+    sw.className = "activity-swatch";
+    sw.style.background = a.color;
+
+    const info = document.createElement("div");
+    info.className = "activity-info";
+    const nameEl = document.createElement("div");
+    nameEl.className = "activity-info-name";
+    nameEl.textContent = a.name;
+    const statsEl = document.createElement("div");
+    statsEl.className = "activity-info-stats";
+    statsEl.textContent =
+      fmtKm(a.stats.distanceM) + " · " + fmtGain(a.stats.gainM) + " ↑ · " +
+      a.covered.size + " segments";
+    info.appendChild(nameEl);
+    info.appendChild(statsEl);
+
+    const rm = document.createElement("button");
+    rm.className = "activity-remove";
+    rm.title = "Remove activity";
+    rm.textContent = "×";
+    rm.addEventListener("click", function () { removeActivity(a.id); });
+
+    item.appendChild(cb);
+    item.appendChild(sw);
+    item.appendChild(info);
+    item.appendChild(rm);
+    activityListEl.appendChild(item);
+  });
+
+  // Unique-segment count — only visible activities contribute.
+  const uniq = new Set();
+  activities.forEach(function (a) {
+    if (a.visible === false) return;
+    a.covered.forEach(function (n) { uniq.add(n); });
+  });
+  activityUniqueCountEl.textContent = String(uniq.size);
+  activitySummaryEl.style.display = activities.length ? "" : "none";
+
+  updateSegmentMarks();
+}
+
+// For each segment, accumulate the colours of activities that cover it
+// and paint matching dots in the sidebar row + concentric rings on the
+// map marker (one ring per covering activity).
+function updateSegmentMarks() {
+  const coverColors = new Map(); // segN -> [color, color, ...]
+  activities.forEach(function (a) {
+    if (a.visible === false) return;
+    a.covered.forEach(function (n) {
+      let arr = coverColors.get(n);
+      if (!arr) { arr = []; coverColors.set(n, arr); }
+      arr.push(a.color);
+    });
+  });
+
+  document.querySelectorAll("#list li").forEach(function (li) {
+    const n = parseInt(li.dataset.segN, 10);
+    const dotsEl = li.querySelector(".seg-cover-dots");
+    if (!dotsEl) return;
+    dotsEl.innerHTML = "";
+    const colors = coverColors.get(n);
+    if (!colors) return;
+    colors.forEach(function (c) {
+      const d = document.createElement("span");
+      d.className = "seg-cover-dot";
+      d.style.background = c;
+      dotsEl.appendChild(d);
+    });
+  });
+
+  Object.keys(layers).forEach(function (k) {
+    const L0 = layers[k];
+    const el = L0.marker.getElement();
+    if (!el) return;
+    const numEl = el.querySelector(".seg-num");
+    if (!numEl) return;
+    const colors = coverColors.get(Number(k));
+    if (!colors || !colors.length) {
+      numEl.style.boxShadow = "";
+      return;
+    }
+    // Stack concentric rings: each activity gets its own 2px outset.
+    const shadows = colors.map(function (c, i) {
+      return "0 0 0 " + ((i + 1) * 2) + "px " + c;
+    });
+    numEl.style.boxShadow = shadows.join(", ");
+  });
+}
+
 </script>
 </body>
 </html>
