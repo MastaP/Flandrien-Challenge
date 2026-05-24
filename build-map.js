@@ -217,7 +217,7 @@ const html = `<!DOCTYPE html>
   .pop td:first-child { color: #666; padding-right: 14px; }
   .pop a { display: block; margin-top: 7px; color: #1769ff; }
   /* Activity upload */
-  .activity-section { background: #0b0e12; border-bottom: 1px solid #2a323c;
+  .activity-section { background: #0b0e12; border-top: 1px solid #2a323c;
     padding: 10px 14px; flex: none; max-height: 40%; overflow-y: auto; }
   .activity-upload-btn { display: block; width: 100%; padding: 8px 10px;
     background: #1d2630; color: #e6e6e6; border: 1px solid #2a323c;
@@ -270,6 +270,8 @@ const html = `<!DOCTYPE html>
       <span class="title"><a href="https://www.cyclinginflanders.cc/flandrien-challenge" target="_blank" rel="noopener">Flandrien Challenge — ${segments.length} segments</a></span>
       <label class="segs-toggle"><input type="checkbox" id="segs-toggle" checked> show</label>
     </h1>
+    <ul id="list"></ul>
+    <div id="routes"></div>
     <div class="activity-section">
       <input type="file" id="activity-file" accept=".gpx,application/gpx+xml" multiple style="display:none">
       <button class="activity-upload-btn" id="activity-upload">Upload activity GPX</button>
@@ -279,8 +281,6 @@ const html = `<!DOCTYPE html>
       </div>
       <div class="activity-list" id="activity-list"></div>
     </div>
-    <ul id="list"></ul>
-    <div id="routes"></div>
   </div>
 </div>
 <script>
