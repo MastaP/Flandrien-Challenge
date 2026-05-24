@@ -273,7 +273,7 @@ const html = `<!DOCTYPE html>
     <div class="activity-section">
       <input type="file" id="activity-file" accept=".gpx,application/gpx+xml" multiple style="display:none">
       <button class="activity-upload-btn" id="activity-upload">Upload activity GPX</button>
-      <div class="activity-hint">Pick one or more files. Not stored — refresh to clear.</div>
+      <div class="activity-hint">Upload your GPX file(s) to see which segments are covered. Not stored — refresh to clear.</div>
       <div class="activity-summary" id="activity-summary" style="display:none">
         <b id="activity-unique-count">0</b> / ${segments.length} unique segments covered
       </div>
